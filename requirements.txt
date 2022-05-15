@@ -1,0 +1,6 @@
+flask
+xbrlassembler
+httpx
+aiolimiter
+beautifulsoup4
+lxml
