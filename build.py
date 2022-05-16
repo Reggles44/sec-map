@@ -1,71 +1,95 @@
 import asyncio
+import json
 import logging
+import logging.config
 import re
 import os
+import datetime
+import math
+import sys
+
+import httpx
+from aiolimiter import AsyncLimiter
 
 from bs4 import BeautifulSoup
 
-from financial_modeling import utils
-
-import httpx
-from xbrlassembler import XBRLType
-
-from financial_modeling import sec_rate_limit
-from financial_modeling.settings import BASE_DATA_DIRECTORY
-
+logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
 logger = logging.getLogger()
-httpx_client = httpx.AsyncClient(timeout=5)
+logger.info('TEST')
+
+HTTPX_CLIENT = httpx.AsyncClient(timeout=5)
+SEC_RATE_LIMITER = AsyncLimiter(9, 1)
 
 CRAWLER_IDX_URL = 'https://www.sec.gov/Archives/edgar/full-index/{}/QTR{}/crawler.idx'
+CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}).*\/([\d\-]+)-index.htm\s*$')
+
+INDEX_URL = 'https://www.sec.gov/Archives/edgar/data/{}/{}-index.htm'
+SCHEMA_TICKET_REGEX = re.compile('(\w+)-\d+.xsd')
+
+START_DATE = datetime.date(year=2020, month=1, day=1)
+END_DATE = datetime.date.today()
+
+INDEX_MAPPING = {}
+INDEX_JSON = 'index.json'
+
+"""
+Index schema
+
+{
+    # CIK is primary index
+    "0000001": {
+        "ticker": "ABC",
+        "company_name": "ABC Inc.",
+        "forms": {
+            "10-K": {
+                "2022-02-09": "0001127602-22-004061"
+            }
+        }
+    }
+}
+"""
 
 
-async def GET(url):
-    async with sec_rate_limit:
+async def get(url):
+    async with SEC_RATE_LIMITER:
         try:
-            response = await httpx_client.get(url, headers={'User-Agent': 'Company Name myname@company.com'})
+            response = await HTTPX_CLIENT.get(url, headers={'User-Agent': 'Company Name myname@company.com'})
             response.raise_for_status()
             return response
         except httpx.TimeoutException:
-            logger.error(f'{url} timeout')
+            pass
 
 
-async def scrape_quarter(year, qtr):
-    logger.debug(f'Scraping {year} QTR{qtr}')
-    crawler_data = await GET(CRAWLER_IDX_URL.format(year, qtr))
+async def scrape_quarter(date):
+    year, qtr = date.year, math.ceil(date.month / 3)
+    logger.info(f'Scraping {year} QTR{qtr}')
+    crawler_data = await get(CRAWLER_IDX_URL.format(year, qtr))
     if not crawler_data:
-        # logger.error(CRAWLER_IDX_URL.format(year, qtr))
         return
 
     starting_index = next(i for i, line in enumerate(crawler_data.text.split('\n')) if all(c == '-' for c in line))
 
-    indexs = []
-
     for line in crawler_data.text.split('\n')[starting_index+1:]:
-        if not any(file_type in line for file_type in ('10-K', '10-Q')):
+        line = line.strip()
+        if not line:
             continue
 
-        info = re.split(r'\s{2,}', line)
-        path = (
-            utils.char_only(info[0]),
-            info[3],
-            info[1],
+        company_name, form_type, cik, date_filed, index_id = CRAWLER_LINE_REGEX.search(line).groups()
+
+        company_data = INDEX_MAPPING.setdefault(
+            cik,
+            {
+                'company_name': company_name,
+                'ticker': None,
+                'forms': {}
+            }
         )
 
-        dir_path = os.path.join(BASE_DATA_DIRECTORY, *path)
-        if os.path.isdir(dir_path) and len(os.listdir(dir_path)) != 0:
-            continue
-        os.makedirs(dir_path, exist_ok=True)
-
-        # logger.debug(info)
-        indexs.append((info[4], path))
-
-    await asyncio.gather(
-        *[scrape_index(url, path) for (url, path) in indexs],
-    )
+        company_data['forms'].setdefault(form_type, {})[date_filed] = index_id
 
 
-async def scrape_index(url, path):
-    index_response = await GET(url)
+async def scrape_index(url):
+    index_response = await get(url)
     if not index_response:
         return
 
@@ -74,33 +98,44 @@ async def scrape_index(url, path):
     if not data_files_table:
         return
 
-    file_map = {}
+    schema_file = data_files_table.find_all(text=SCHEMA_TICKET_REGEX)[0]
+    ticker = SCHEMA_TICKET_REGEX.search(schema_file.text).group(1)
+    return ticker.upper()
 
-    for row in data_files_table('tr')[1:]:
-        link = "https://www.sec.gov" + row.find_all('td')[2].find('a')['href']
-        file_name = link.rsplit('/', 1)[1]
-        file_path = os.path.join(BASE_DATA_DIRECTORY, *path, file_name)
-        if os.path.isfile(file_path):
-            continue
 
-        xbrl_type = XBRLType.get(file_name)
-        if xbrl_type:
-            file_map[xbrl_type] = link, file_path
+async def find_ticker(cik, data):
+    ticker = data['ticker']
+    if ticker:
+        return
 
-    async def get_save(url, path):
-        file = await GET(url)
-        if not file:
-            return
+    index_ids = []
+    for date_index_mapping in data['forms'].values():
+        index_ids.extend(date_index_mapping.values())
 
-        if os.path.isfile(path):
-            return
-        open(path, 'wb+').write(file.content)
+    while not ticker and index_ids:
+        url = INDEX_URL.format(cik, index_ids.pop())
+        tck = await scrape_index(url)
+        if tck:
+            ticker = tck
+
+    data['ticker'] = ticker
+
+
+async def build():
+    quarters = int(((END_DATE.year - START_DATE.year) * 4 + (END_DATE.month - START_DATE.month) + 1) / 3)
 
     await asyncio.gather(
-        *[get_save(url, file_path)
-        for xbrl_type, (url, file_path) in file_map.items()]
+        *(scrape_quarter(START_DATE + datetime.timedelta(weeks=12 * i)) for i in range(quarters)),
     )
+
+    await asyncio.gather(
+        *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
+    )
+
+    json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
 
 
 if __name__ == '__main__':
-    
+    if os.path.isfile(INDEX_JSON) and '--force' not in sys.argv:
+        INDEX_MAPPING = json.load(open(INDEX_JSON))
+    asyncio.get_event_loop().run_until_complete(build())
