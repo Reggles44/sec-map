@@ -4,3 +4,5 @@ httpx
 aiolimiter
 beautifulsoup4
 lxml
+python-dateutil
+marshmallow

@@ -6,19 +6,19 @@ import re
 import os
 import datetime
 import math
-import sys
+import marshmallow
+import xbrl_endpoint
 
 import httpx
 from aiolimiter import AsyncLimiter
 
 from bs4 import BeautifulSoup
+from dateutil.relativedelta import relativedelta
 
-logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
 logger = logging.getLogger()
-logger.info('TEST')
 
 HTTPX_CLIENT = httpx.AsyncClient(timeout=5)
-SEC_RATE_LIMITER = AsyncLimiter(9, 1)
+SEC_RATE_LIMITER = AsyncLimiter(5, 1)
 
 CRAWLER_IDX_URL = 'https://www.sec.gov/Archives/edgar/full-index/{}/QTR{}/crawler.idx'
 CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}).*\/([\d\-]+)-index.htm\s*$')
@@ -26,11 +26,14 @@ CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d
 INDEX_URL = 'https://www.sec.gov/Archives/edgar/data/{}/{}-index.htm'
 SCHEMA_TICKET_REGEX = re.compile('(\w+)-\d+.xsd')
 
-START_DATE = datetime.date(year=2020, month=1, day=1)
+START_DATE = datetime.date(year=2019, month=1, day=1)
 END_DATE = datetime.date.today()
 
-INDEX_MAPPING = {}
+META_JSON = 'meta.json'
+META_MAPPING = json.load(open(META_JSON)) if os.path.isfile(META_JSON) else {}
+
 INDEX_JSON = 'index.json'
+INDEX_MAPPING = json.load(open(INDEX_JSON)) if os.path.isfile(INDEX_JSON) else {}
 
 """
 Index schema
@@ -62,6 +65,10 @@ async def get(url):
 
 async def scrape_quarter(date):
     year, qtr = date.year, math.ceil(date.month / 3)
+    key = f'{year}-{qtr}'
+    if META_MAPPING.get(key):
+        return
+
     logger.info(f'Scraping {year} QTR{qtr}')
     crawler_data = await get(CRAWLER_IDX_URL.format(year, qtr))
     if not crawler_data:
@@ -79,13 +86,15 @@ async def scrape_quarter(date):
         company_data = INDEX_MAPPING.setdefault(
             cik,
             {
-                'company_name': company_name,
+                'company_name': company_name.strip(),
                 'ticker': None,
                 'forms': {}
             }
         )
 
         company_data['forms'].setdefault(form_type, {})[date_filed] = index_id
+
+    META_MAPPING[key] = True
 
 
 async def scrape_index(url):
@@ -108,34 +117,38 @@ async def find_ticker(cik, data):
     if ticker:
         return
 
-    index_ids = []
-    for date_index_mapping in data['forms'].values():
-        index_ids.extend(date_index_mapping.values())
+    index_ids = list(data['forms'].get('10-Q', {}).values())
 
-    while not ticker and index_ids:
+    while index_ids:
         url = INDEX_URL.format(cik, index_ids.pop())
-        tck = await scrape_index(url)
-        if tck:
-            ticker = tck
+        ticker = await scrape_index(url)
+        if ticker:
+            logger.debug(f'Found Ticker {ticker} for {data["company_name"]}')
+            break
 
     data['ticker'] = ticker
 
 
 async def build():
-    quarters = int(((END_DATE.year - START_DATE.year) * 4 + (END_DATE.month - START_DATE.month) + 1) / 3)
+    quarters = int((END_DATE - START_DATE).days / (365/4)) + 1
 
     await asyncio.gather(
-        *(scrape_quarter(START_DATE + datetime.timedelta(weeks=12 * i)) for i in range(quarters)),
-    )
-
-    await asyncio.gather(
-        *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
+        *(scrape_quarter(START_DATE + relativedelta(months=3 * i)) for i in range(quarters)),
     )
 
     json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
+    json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
+
+    try:
+        await asyncio.gather(
+            *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
+        )
+    except:
+        pass
+
+    json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
+    json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
 
 
 if __name__ == '__main__':
-    if os.path.isfile(INDEX_JSON) and '--force' not in sys.argv:
-        INDEX_MAPPING = json.load(open(INDEX_JSON))
     asyncio.get_event_loop().run_until_complete(build())
