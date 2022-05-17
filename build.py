@@ -6,8 +6,10 @@ import re
 import os
 import datetime
 import math
+import sys
+
 import marshmallow
-import xbrl_endpoint
+import sec_map
 
 import httpx
 from aiolimiter import AsyncLimiter
@@ -31,6 +33,9 @@ END_DATE = datetime.date.today()
 
 META_JSON = 'meta.json'
 META_MAPPING = json.load(open(META_JSON)) if os.path.isfile(META_JSON) else {}
+
+TICKER_JSON = 'ticker.json'
+TICKER_MAPPING = json.load(open(TICKER_JSON)) if os.path.isfile(TICKER_JSON) else {}
 
 INDEX_JSON = 'index.json'
 INDEX_MAPPING = json.load(open(INDEX_JSON)) if os.path.isfile(INDEX_JSON) else {}
@@ -113,18 +118,18 @@ async def scrape_index(url):
 
 
 async def find_ticker(cik, data):
-    ticker = data['ticker']
-    if ticker:
-        return
+    ticker = TICKER_MAPPING.get(cik)
+    if not ticker:
+        index_ids = list(data['forms'].get('10-Q', {}).values())
 
-    index_ids = list(data['forms'].get('10-Q', {}).values())
+        while index_ids:
+            url = INDEX_URL.format(cik, index_ids.pop())
+            ticker = await scrape_index(url)
+            if ticker:
+                logger.debug(f'Found Ticker {ticker} for {data["company_name"]}')
+                break
 
-    while index_ids:
-        url = INDEX_URL.format(cik, index_ids.pop())
-        ticker = await scrape_index(url)
-        if ticker:
-            logger.debug(f'Found Ticker {ticker} for {data["company_name"]}')
-            break
+        TICKER_MAPPING[cik] = ticker
 
     data['ticker'] = ticker
 
@@ -139,16 +144,18 @@ async def build():
     json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
     json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
 
-    try:
-        await asyncio.gather(
-            *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
-        )
-    except:
-        pass
+    await asyncio.gather(
+        *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
+    )
 
+    json.dump(TICKER_MAPPING, open(TICKER_JSON, 'w+'), indent=4)
     json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
     json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
 
 
 if __name__ == '__main__':
+    if '--clear' in sys.argv:
+        META_MAPPING = {}
+        INDEX_MAPPING = {}
+
     asyncio.get_event_loop().run_until_complete(build())

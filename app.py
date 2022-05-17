@@ -6,7 +6,7 @@ from flask import Flask
 from flask import request
 
 from build import INDEX_MAPPING
-from xbrl_endpoint.serializers import lookup_schema
+from sec_map.serializers import lookup_schema
 
 app = Flask(__name__)
 logger = logging.getLogger()
