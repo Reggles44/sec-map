@@ -19,7 +19,6 @@ def index():
 
 @app.route('/lookup', methods=['GET'])
 def lookup():
-    print('----------------------', request.args)
     validated_data = lookup_schema.load(request.args)
 
     data = None
@@ -28,7 +27,6 @@ def lookup():
                 validated_data.get('ticker') == company['ticker'] or \
                 validated_data.get('company_name') == company['company_name']:
             data = company
-            print('Found Company', company)
             break
 
     form_type = validated_data.get('form_type')
@@ -37,14 +35,11 @@ def lookup():
 
     if form_type:
         data = data['forms'][form_type]
-        print('Form Lookup', data)
 
         if start_date:
             data = {date: v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') > start_date}
-            print('Start Date Lookup', data)
 
         if end_date:
             data = {date: v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') < end_date}
-            print('End Date Lookup', data)
 
     return data
