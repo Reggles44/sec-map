@@ -1,6 +1,7 @@
 flask
 xbrlassembler
 httpx
+requests
 aiolimiter
 beautifulsoup4
 lxml
