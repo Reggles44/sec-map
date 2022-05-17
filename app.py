@@ -1,12 +1,13 @@
+import asyncio
 import datetime
 import logging
-import re
 
 from flask import Flask
 from flask import request
 
 from build import INDEX_MAPPING
-from sec_map.serializers import lookup_schema
+from sec_map.scrape import make_assembler
+from sec_map.serializers import LookupSchema, AssembleSchema
 
 app = Flask(__name__)
 logger = logging.getLogger()
@@ -19,7 +20,7 @@ def index():
 
 @app.route('/lookup', methods=['GET'])
 def lookup():
-    validated_data = lookup_schema.load(request.args)
+    validated_data = LookupSchema().load(request.args)
 
     data = None
     for cik, company in INDEX_MAPPING.items():
@@ -46,28 +47,39 @@ def lookup():
 
 
 @app.route('/assemble', methods=['GET'])
-def assemble():
-    validated_data = lookup_schema.load(request.args)
+async def assemble():
+    validated_data = AssembleSchema().load(request.args)
 
     data = None
-    for cik, company in INDEX_MAPPING.items():
-        if validated_data.get('cik') == cik or \
+    cik = None
+    for c, company in INDEX_MAPPING.items():
+        if validated_data.get('cik') == c or \
                 validated_data.get('ticker') == company['ticker'] or \
                 validated_data.get('company_name') == company['company_name']:
             data = company
+            cik = c
             break
 
-    form_type = validated_data.get('form_type')
     start_date = validated_data.get('start_date')
     end_date = validated_data.get('end_date')
 
-    if form_type:
-        data = data['forms'][form_type]
+    data = data['forms'][validated_data.get('form_type')]
 
+    if not (start_date and end_date):
+        ids = data.values()
+    else:
         if start_date:
-            data = {date: v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') > start_date}
-
+            ids = (v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') > start_date)
         if end_date:
-            data = {date: v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') < end_date}
+            ids = (v for date, v in data.items() if datetime.datetime.strptime(date, '%Y-%m-%d') < end_date)
 
-    return data
+    assemblers = await asyncio.gather(
+        *(make_assembler(cik, index_id) for index_id in ids)
+    )
+
+    if len(assemblers) == 1:
+        return assemblers[0].to_json()
+    else:
+        assembler = assemblers[0]
+        assembler.merge(assemblers[1:])
+        return assembler.to_json()

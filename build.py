@@ -7,16 +7,12 @@ import datetime
 import math
 import sys
 
-import httpx
-from aiolimiter import AsyncLimiter
-
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 
-logger = logging.getLogger()
+from sec_map.utils import get
 
-HTTPX_CLIENT = httpx.AsyncClient(timeout=5)
-SEC_RATE_LIMITER = AsyncLimiter(5, 1)
+logger = logging.getLogger()
 
 CRAWLER_IDX_URL = 'https://www.sec.gov/Archives/edgar/full-index/{}/QTR{}/crawler.idx'
 CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d{2}).*\/([\d\-]+)-index.htm\s*$')
@@ -54,14 +50,7 @@ Index schema
 """
 
 
-async def get(url):
-    async with SEC_RATE_LIMITER:
-        try:
-            response = await HTTPX_CLIENT.get(url, headers={'User-Agent': 'Company Name myname@company.com'})
-            response.raise_for_status()
-            return response
-        except httpx.TimeoutException:
-            pass
+
 
 
 async def scrape_quarter(date):
