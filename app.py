@@ -81,5 +81,5 @@ async def assemble():
         return assemblers[0].to_json()
     else:
         assembler = assemblers[0]
-        assembler.merge(assemblers[1:])
+        assembler.merge(*assemblers[1:])
         return assembler.to_json()

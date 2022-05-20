@@ -1,6 +1,6 @@
 flask
 aioflask
-xbrlassembler
+
 httpx
 requests
 aiolimiter
@@ -8,3 +8,5 @@ beautifulsoup4
 lxml
 python-dateutil
 marshmallow
+
+git+https://github.com/Reggles44/xbrlassembler@main

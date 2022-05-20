@@ -22,8 +22,9 @@ async def make_assembler(cik, index_id) -> XBRLAssembler:
     for row in data_files_table('tr')[1:]:
         link = "https://www.sec.gov" + row.find_all('td')[2].find('a')['href']
         file_name = link.rsplit('/', 1)[1]
-        xbrl_type = XBRLType.get(file_name)
+        xbrl_type = XBRLType(file_name)
         if xbrl_type:
             file_map[xbrl_type] = BeautifulSoup(await get(link), 'lxml')
 
-    return XBRLAssembler._init(file_map, ref_doc=XBRLType.PRE)
+    return XBRLAssembler.parse(file_map, ref_doc=XBRLType.PRE)
+3

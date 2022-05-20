@@ -20,7 +20,7 @@ CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d
 INDEX_URL = 'https://www.sec.gov/Archives/edgar/data/{}/{}-index.htm'
 SCHEMA_TICKET_REGEX = re.compile('(\w+)-\d+.xsd')
 
-START_DATE = datetime.date(year=2019, month=1, day=1)
+START_DATE = datetime.date(year=2018, month=1, day=1)
 END_DATE = datetime.date.today()
 
 META_JSON = 'meta.json'
