@@ -20,7 +20,7 @@ CRAWLER_LINE_REGEX = re.compile('(.+)\s+([\dA-Z\-\/]+)\s+(\d+)\s+(\d{4}-\d{2}-\d
 INDEX_URL = 'https://www.sec.gov/Archives/edgar/data/{}/{}-index.htm'
 SCHEMA_TICKET_REGEX = re.compile('(\w+)-\d+.xsd')
 
-START_DATE = datetime.date(year=2018, month=1, day=1)
+START_DATE = datetime.date(year=2015, month=1, day=1)
 END_DATE = datetime.date.today()
 
 META_JSON = 'meta.json'
@@ -50,9 +50,6 @@ Index schema
 """
 
 
-
-
-
 async def scrape_quarter(date):
     year, qtr = date.year, math.ceil(date.month / 3)
     key = f'{year}-{qtr}'
@@ -71,7 +68,11 @@ async def scrape_quarter(date):
         if not line:
             continue
 
-        company_name, form_type, cik, date_filed, index_id = CRAWLER_LINE_REGEX.search(line).groups()
+        try:
+            company_name, form_type, cik, date_filed, index_id = CRAWLER_LINE_REGEX.search(line).groups()
+        except AttributeError:
+            logger.debug(f'Invalid line ({line})')
+            continue
 
         company_data = INDEX_MAPPING.setdefault(
             cik,
