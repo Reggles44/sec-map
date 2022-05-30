@@ -2,26 +2,35 @@ import asyncio
 import datetime
 import logging
 
-import werkzeug
+import httpx
+from aiolimiter import AsyncLimiter
+from bs4 import BeautifulSoup
 from flask import Flask
 from flask import request
 from marshmallow import ValidationError
+from xbrlassembler import XBRLType, XBRLAssembler
 
 from build import INDEX_MAPPING
-from sec_map.scrape import make_assembler
 from sec_map.serializers import LookupSchema, AssembleSchema
 
 app = Flask(__name__)
 logger = logging.getLogger()
 
-
 lookup_schema = LookupSchema()
 assemble_schema = AssembleSchema()
 
+HTTPX_CLIENT = httpx.AsyncClient(timeout=5)
+SEC_RATE_LIMITER = AsyncLimiter(5, 1)
 
-@app.route('/', methods=['GET'])
-def index():
-    return INDEX_MAPPING
+
+async def get(url):
+    async with SEC_RATE_LIMITER:
+        try:
+            response = await HTTPX_CLIENT.get(url, headers={'User-Agent': 'Company Name myname@company.com'})
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException:
+            pass
 
 
 def _lookup(kwargs):
@@ -51,6 +60,11 @@ def _lookup(kwargs):
     return None, None
 
 
+@app.route('/', methods=['GET'])
+def index():
+    return INDEX_MAPPING
+
+
 @app.route('/lookup', methods=['GET'])
 def lookup():
     try:
@@ -61,6 +75,31 @@ def lookup():
     if cik is None and data is None:
         return 'Could not find company from cik or ticker', 404
     return data
+
+
+SEC_INDEX_URL = 'https://www.sec.gov/Archives/edgar/data/{}/{}-index.htm'
+
+
+async def make_assembler(cik, index_id) -> XBRLAssembler:
+    index_response = await get(SEC_INDEX_URL.format(cik, index_id))
+    if not index_response:
+        return
+
+    index_soup = BeautifulSoup(index_response.content, 'lxml')
+    data_files_table = index_soup.find('table', {'summary': 'Data Files'})
+    if not data_files_table:
+        return
+
+    file_map = {}
+
+    for row in data_files_table('tr')[1:]:
+        link = "https://www.sec.gov" + row.find_all('td')[2].find('a')['href']
+        file_name = link.rsplit('/', 1)[1]
+        xbrl_type = XBRLType(file_name)
+        if xbrl_type:
+            file_map[xbrl_type] = BeautifulSoup(await get(link), 'lxml')
+
+    return XBRLAssembler.parse(file_map, ref_doc=XBRLType.PRE)
 
 
 @app.route('/assemble', methods=['GET'])
