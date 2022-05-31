@@ -1,4 +1,4 @@
 /.idea/
 /venv/
-index.json
-meta.json
+sec_map/resources/index.json
+sec_map/resources/meta.json

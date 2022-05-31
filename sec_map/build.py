@@ -10,6 +10,7 @@ import sys
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta
 
+from sec_map import TICKER_MAPPING, TICKER_FILE_PATH, INDEX_FILE_PATH, META_FILE_PATH
 from sec_map.utils import get
 
 logger = logging.getLogger()
@@ -22,32 +23,6 @@ SCHEMA_TICKET_REGEX = re.compile('(\w+)-\d+.xsd')
 
 START_DATE = datetime.date(year=2015, month=1, day=1)
 END_DATE = datetime.date.today()
-
-META_JSON = 'meta.json'
-META_MAPPING = json.load(open(META_JSON)) if os.path.isfile(META_JSON) else {}
-
-TICKER_JSON = 'ticker.json'
-TICKER_MAPPING = json.load(open(TICKER_JSON)) if os.path.isfile(TICKER_JSON) else {}
-
-INDEX_JSON = 'index.json'
-INDEX_MAPPING = json.load(open(INDEX_JSON)) if os.path.isfile(INDEX_JSON) else {}
-
-"""
-Index schema
-
-{
-    # CIK is primary index
-    "0000001": {
-        "ticker": "ABC",
-        "company_name": "ABC Inc.",
-        "forms": {
-            "10-K": {
-                "2022-02-09": "0001127602-22-004061"
-            }
-        }
-    }
-}
-"""
 
 
 async def scrape_quarter(date):
@@ -120,23 +95,24 @@ async def find_ticker(cik, data):
     data['ticker'] = ticker
 
 
-async def build():
+async def build(tickers=False):
     quarters = int((END_DATE - START_DATE).days / (365/4)) + 1
 
     await asyncio.gather(
         *(scrape_quarter(START_DATE + relativedelta(months=3 * i)) for i in range(quarters)),
     )
 
-    json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
-    json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
+    json.dump(INDEX_MAPPING, open(INDEX_FILE_PATH, 'w+'), indent=4)
+    json.dump(META_MAPPING, open(META_FILE_PATH, 'w+'), indent=4)
 
-    await asyncio.gather(
-        *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
-    )
+    if tickers:
+        await asyncio.gather(
+            *(find_ticker(cik, data) for cik, data in INDEX_MAPPING.items())
+        )
 
-    json.dump(TICKER_MAPPING, open(TICKER_JSON, 'w+'), indent=4)
-    json.dump(INDEX_MAPPING, open(INDEX_JSON, 'w+'), indent=4)
-    json.dump(META_MAPPING, open(META_JSON, 'w+'), indent=4)
+        json.dump(TICKER_MAPPING, open(TICKER_FILE_PATH, 'w+'), indent=4)
+        json.dump(INDEX_MAPPING, open(INDEX_FILE_PATH, 'w+'), indent=4)
+        json.dump(META_MAPPING, open(META_FILE_PATH, 'w+'), indent=4)
 
 
 if __name__ == '__main__':
@@ -144,4 +120,4 @@ if __name__ == '__main__':
         META_MAPPING = {}
         INDEX_MAPPING = {}
 
-    asyncio.get_event_loop().run_until_complete(build())
+    asyncio.get_event_loop().run_until_complete(build(tickers=True))
